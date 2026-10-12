@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block title %}Create account — WonderLove{% endblock %}{% block content %}
+<section class="form-wrap"><div class="form-intro"><span class="eyebrow">YOUR STORY STARTS HERE</span><h1>Create your free account ❤️</h1><p>Join WonderLove to discover people and meaningful connections. You must be 18 or older.</p></div>
+<form method="post" class="card form-card" id="register-form">
+<label>Display name<input name="name" maxlength="60" required autocomplete="nickname"></label>
+<label>Email address<input type="email" name="email" required autocomplete="email"></label>
+<div class="field-grid"><label>Password<div class="password-wrap"><input id="password" type="password" name="password" minlength="8" required autocomplete="new-password"><button type="button" class="show-password" data-toggle-password="password">Show</button></div><small>At least 8 characters.</small></label>
+<label>Confirm password<div class="password-wrap"><input id="confirm" type="password" name="confirm" minlength="8" required autocomplete="new-password"><button type="button" class="show-password" data-toggle-password="confirm">Show</button></div><small id="match-note">Enter the same password again.</small></label></div>
+<label>Date of birth<input type="date" name="dob" required max="{{ '' }}"></label>
+<div class="field-grid"><label>Sex<select name="sex" required><option value="">Choose</option><option>Male</option><option>Female</option></select></label><label>Country<input name="country" maxlength="80" required autocomplete="country-name"></label></div>
+<label>Who would you like to meet?<select name="looking_for"><option value="Everyone">Everyone</option><option>Male</option><option>Female</option></select></label>
+<label class="check"><input type="checkbox" required> I agree to the <a href="{{ url_for('terms') }}">Terms</a> and <a href="{{ url_for('privacy') }}">Privacy Policy</a>.</label>
+<button class="button full" type="submit">{{ t.register }}</button><p class="form-bottom">{{ t.already }} <a href="{{ url_for('login') }}">{{ t.login }}</a></p>
+</form></section>
+<script>
+const dob=document.querySelector('input[name="dob"]'); const cutoff=new Date(); cutoff.setFullYear(cutoff.getFullYear()-18); dob.max=cutoff.toISOString().slice(0,10);
+const p=document.getElementById('password'), c=document.getElementById('confirm'), n=document.getElementById('match-note'), form=document.getElementById('register-form');
+function checkMatch(){ if(!c.value){n.textContent='Enter the same password again.';n.className='';c.setCustomValidity('');} else if(p.value!==c.value){n.textContent='Passwords do not match.';n.className='error-text';c.setCustomValidity('Passwords do not match.');} else {n.textContent='Passwords match ✓';n.className='success-text';c.setCustomValidity('');}}
+p.addEventListener('input',checkMatch); c.addEventListener('input',checkMatch); form.addEventListener('submit',e=>{checkMatch();if(!form.checkValidity()){e.preventDefault();form.reportValidity();}});
+</script>
+{% endblock %}
