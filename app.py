@@ -1,4 +1,6 @@
-import os, re, secrets, sqlite3
+import os, re, secrets
+import psycopg
+from psycopg.rows import dict_row
 from datetime import datetime, date
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, g, abort
@@ -6,7 +8,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(APP_DIR, "wonderlove.db"))
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is missing. Add your Neon connection string in Render Environment.")
 UPLOAD_FOLDER = os.path.join(APP_DIR, "static", "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -37,9 +41,7 @@ UI = {
 
 def db_conn():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
+        g.db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     return g.db
 
 @app.teardown_appcontext
@@ -49,52 +51,48 @@ def close_db(error=None):
         db.close()
 
 def init_db():
-    db = sqlite3.connect(DB_PATH)
-    db.execute("PRAGMA foreign_keys = ON")
-    db.executescript("""
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL, dob TEXT NOT NULL,
-      sex TEXT NOT NULL CHECK(sex IN ('Male','Female')),
-      country TEXT NOT NULL, looking_for TEXT NOT NULL DEFAULT 'Everyone',
-      bio TEXT DEFAULT '', interests TEXT DEFAULT '', intentions TEXT DEFAULT '',
-      photo TEXT DEFAULT '', language TEXT DEFAULT 'en',
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS likes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      to_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL, UNIQUE(from_user,to_user), CHECK(from_user != to_user)
-    );
-    CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      body TEXT NOT NULL, created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS blocks (
-      blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      PRIMARY KEY(blocker_id, blocked_id), CHECK(blocker_id != blocked_id)
-    );
-    CREATE TABLE IF NOT EXISTS reports (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      reported_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      reason TEXT NOT NULL, created_at TEXT NOT NULL
-    );
-    """)
-    db.commit()
-    db.close()
+    # Create each table separately for PostgreSQL compatibility.
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as db:
+        db.execute("""CREATE TABLE IF NOT EXISTS users (
+          id BIGSERIAL PRIMARY KEY,
+          name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL, dob TEXT NOT NULL,
+          sex TEXT NOT NULL CHECK(sex IN ('Male','Female')),
+          country TEXT NOT NULL, looking_for TEXT NOT NULL DEFAULT 'Everyone',
+          bio TEXT DEFAULT '', interests TEXT DEFAULT '', intentions TEXT DEFAULT '',
+          photo TEXT DEFAULT '', language TEXT DEFAULT 'en',
+          created_at TEXT NOT NULL
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS likes (
+          id BIGSERIAL PRIMARY KEY,
+          from_user BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          to_user BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL, UNIQUE(from_user,to_user), CHECK(from_user != to_user)
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS messages (
+          id BIGSERIAL PRIMARY KEY,
+          sender_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          recipient_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          body TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS blocks (
+          blocker_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          blocked_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          PRIMARY KEY(blocker_id, blocked_id), CHECK(blocker_id != blocked_id)
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS reports (
+          id BIGSERIAL PRIMARY KEY,
+          reporter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          reported_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          reason TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
 
 init_db()
 
 def current_user():
     if "user_id" not in session:
         return None
-    return db_conn().execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    return db_conn().execute("SELECT * FROM users WHERE id=%s", (session["user_id"],)).fetchone()
 
 @app.context_processor
 def inject_globals():
@@ -128,14 +126,14 @@ def age_from_dob(dob):
         return None
 
 def matched(db, a, b):
-    return db.execute("SELECT 1 FROM likes WHERE from_user=? AND to_user=?", (a,b)).fetchone() and db.execute("SELECT 1 FROM likes WHERE from_user=? AND to_user=?", (b,a)).fetchone()
+    return db.execute("SELECT 1 FROM likes WHERE from_user=%s AND to_user=%s", (a,b)).fetchone() and db.execute("SELECT 1 FROM likes WHERE from_user=%s AND to_user=%s", (b,a)).fetchone()
 
 def is_blocked(db, a, b):
-    return bool(db.execute("SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)", (a,b,b,a)).fetchone())
+    return bool(db.execute("SELECT 1 FROM blocks WHERE (blocker_id=%s AND blocked_id=%s) OR (blocker_id=%s AND blocked_id=%s)", (a,b,b,a)).fetchone())
 
 def introductory_count(db, sender, recipient):
     # Count messages sent by this member to this person before they match.
-    return db.execute("SELECT COUNT(*) n FROM messages WHERE sender_id=? AND recipient_id=?", (sender,recipient)).fetchone()["n"]
+    return db.execute("SELECT COUNT(*) n FROM messages WHERE sender_id=%s AND recipient_id=%s", (sender,recipient)).fetchone()["n"]
 
 @app.route("/")
 def index():
@@ -148,7 +146,7 @@ def set_language():
     session["language"] = code
     user = current_user()
     if user:
-        db_conn().execute("UPDATE users SET language=? WHERE id=?", (code,user["id"]))
+        db_conn().execute("UPDATE users SET language=%s WHERE id=%s", (code,user["id"]))
         db_conn().commit()
     return redirect(request.referrer or url_for("index"))
 
@@ -178,13 +176,14 @@ def register():
         else:
             db = db_conn()
             try:
-                cur = db.execute("INSERT INTO users (name,email,password_hash,dob,sex,country,looking_for,language,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                cur = db.execute("INSERT INTO users (name,email,password_hash,dob,sex,country,looking_for,language,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                     (name,email,generate_password_hash(password),dob,sex,country,looking,session.get("language","en"),datetime.utcnow().isoformat()))
+                new_user_id = cur.fetchone()["id"]
                 db.commit()
-                session.clear(); session["user_id"] = cur.lastrowid
+                session.clear(); session["user_id"] = new_user_id
                 flash("Welcome to WonderLove! Your account was created.")
                 return redirect(url_for("profile"))
-            except sqlite3.IntegrityError:
+            except psycopg.IntegrityError:
                 flash("That email address is already registered. Please log in instead.")
     return render_template("register.html")
 
@@ -193,7 +192,7 @@ def login():
     if request.method == "POST":
         email = request.form.get("email","").strip().lower()
         password = request.form.get("password","")
-        user = db_conn().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        user = db_conn().execute("SELECT * FROM users WHERE email=%s", (email,)).fetchone()
         if user and check_password_hash(user["password_hash"], password):
             session.clear(); session["user_id"] = user["id"]
             flash("Welcome back!")
@@ -235,7 +234,7 @@ def profile():
         if not name or not country:
             flash("Display name and country are required.")
         else:
-            db.execute("UPDATE users SET name=?,country=?,bio=?,interests=?,intentions=?,looking_for=?,language=?,photo=? WHERE id=?",
+            db.execute("UPDATE users SET name=%s,country=%s,bio=%s,interests=%s,intentions=%s,looking_for=%s,language=%s,photo=%s WHERE id=%s",
                 (name,country,bio,interests,intentions,looking,language,photo,user["id"]))
             db.commit(); session["language"]=language
             flash("Your profile has been saved.")
@@ -251,7 +250,7 @@ def discover():
     country=request.args.get("country","").strip()[:80]
     min_age=request.args.get("min_age","18")
     max_age=request.args.get("max_age","99")
-    users=db.execute("SELECT * FROM users WHERE id != ? ORDER BY created_at DESC", (me["id"],)).fetchall()
+    users=db.execute("SELECT * FROM users WHERE id != %s ORDER BY created_at DESC", (me["id"],)).fetchall()
     result=[]
     for u in users:
         if is_blocked(db, me["id"], u["id"]): continue
@@ -263,7 +262,7 @@ def discover():
         except Exception: pass
         if country and country.lower() not in u["country"].lower(): continue
         if q and q.lower() not in (u["name"]+" "+u["bio"]+" "+u["interests"]+" "+u["country"]).lower(): continue
-        result.append({"user":u,"age":age,"liked":bool(db.execute("SELECT 1 FROM likes WHERE from_user=? AND to_user=?",(me["id"],u["id"])).fetchone()),"matched":bool(matched(db,me["id"],u["id"]))})
+        result.append({"user":u,"age":age,"liked":bool(db.execute("SELECT 1 FROM likes WHERE from_user=%s AND to_user=%s",(me["id"],u["id"])).fetchone()),"matched":bool(matched(db,me["id"],u["id"]))})
     return render_template("discover.html", profiles=result, q=q, country=country, min_age=min_age, max_age=max_age)
 
 @app.route("/like/<int:user_id>", methods=["POST"])
@@ -271,12 +270,12 @@ def discover():
 def like(user_id):
     db=db_conn(); me=current_user()
     if user_id==me["id"]: abort(400)
-    target=db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    target=db.execute("SELECT * FROM users WHERE id=%s", (user_id,)).fetchone()
     if not target: abort(404)
     if is_blocked(db,me["id"],user_id):
         flash("You cannot interact with this member.")
         return redirect(url_for("discover"))
-    db.execute("INSERT OR IGNORE INTO likes (from_user,to_user,created_at) VALUES (?,?,?)",(me["id"],user_id,datetime.utcnow().isoformat()))
+    db.execute("INSERT INTO likes (from_user,to_user,created_at) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",(me["id"],user_id,datetime.utcnow().isoformat()))
     db.commit()
     if matched(db,me["id"],user_id):
         flash("It's a match! You can now chat freely. ❤️")
@@ -289,7 +288,7 @@ def like(user_id):
 def matches():
     db=db_conn(); me=current_user()
     rows=db.execute("""SELECT u.* FROM likes l JOIN users u ON u.id=l.to_user
-       WHERE l.from_user=? AND EXISTS (SELECT 1 FROM likes x WHERE x.from_user=u.id AND x.to_user=?)
+       WHERE l.from_user=%s AND EXISTS (SELECT 1 FROM likes x WHERE x.from_user=u.id AND x.to_user=%s)
        ORDER BY u.name""",(me["id"],me["id"])).fetchall()
     people=[{"user":u,"age":age_from_dob(u["dob"])} for u in rows if not is_blocked(db,me["id"],u["id"])]
     return render_template("matches.html", profiles=people)
@@ -298,8 +297,8 @@ def matches():
 @login_required
 def message_list():
     db=db_conn(); me=current_user()
-    rows=db.execute("""SELECT u.* FROM users u WHERE u.id != ? AND
-      (EXISTS(SELECT 1 FROM messages m WHERE (m.sender_id=? AND m.recipient_id=u.id) OR (m.sender_id=u.id AND m.recipient_id=?)))
+    rows=db.execute("""SELECT u.* FROM users u WHERE u.id != %s AND
+      (EXISTS(SELECT 1 FROM messages m WHERE (m.sender_id=%s AND m.recipient_id=u.id) OR (m.sender_id=u.id AND m.recipient_id=%s)))
       ORDER BY u.name""",(me["id"],me["id"],me["id"])).fetchall()
     people=[{"user":u,"age":age_from_dob(u["dob"])} for u in rows if not is_blocked(db,me["id"],u["id"])]
     return render_template("messages.html", profiles=people)
@@ -309,7 +308,7 @@ def message_list():
 def chat(user_id):
     db=db_conn(); me=current_user()
     if user_id==me["id"]: abort(400)
-    other=db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    other=db.execute("SELECT * FROM users WHERE id=%s", (user_id,)).fetchone()
     if not other: abort(404)
     if is_blocked(db,me["id"],user_id):
         flash("This conversation is unavailable.")
@@ -325,11 +324,11 @@ def chat(user_id):
         elif not is_match and count>=3:
             flash("You've used your 3 introductory messages with this person. If you both like each other, you can continue chatting.")
         else:
-            db.execute("INSERT INTO messages (sender_id,recipient_id,body,created_at) VALUES (?,?,?,?)",(me["id"],user_id,body,datetime.utcnow().isoformat()))
+            db.execute("INSERT INTO messages (sender_id,recipient_id,body,created_at) VALUES (%s,%s,%s,%s)",(me["id"],user_id,body,datetime.utcnow().isoformat()))
             db.commit()
             return redirect(url_for("chat",user_id=user_id))
     rows=db.execute("""SELECT m.*,u.name sender_name FROM messages m JOIN users u ON u.id=m.sender_id
-      WHERE (m.sender_id=? AND m.recipient_id=?) OR (m.sender_id=? AND m.recipient_id=?)
+      WHERE (m.sender_id=%s AND m.recipient_id=%s) OR (m.sender_id=%s AND m.recipient_id=%s)
       ORDER BY m.id""",(me["id"],user_id,user_id,me["id"])).fetchall()
     can_send=is_match or introductory_count(db,me["id"],user_id)<3
     return render_template("chat.html", other=other, age=age_from_dob(other["dob"]), messages=rows, is_match=is_match, can_send=can_send)
@@ -338,19 +337,19 @@ def chat(user_id):
 @login_required
 def member(user_id):
     db=db_conn(); me=current_user()
-    u=db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    u=db.execute("SELECT * FROM users WHERE id=%s", (user_id,)).fetchone()
     if not u: abort(404)
     if is_blocked(db,me["id"],user_id):
         flash("This profile is unavailable.")
         return redirect(url_for("discover"))
-    return render_template("member.html", user=u, age=age_from_dob(u["dob"]), liked=bool(db.execute("SELECT 1 FROM likes WHERE from_user=? AND to_user=?",(me["id"],user_id)).fetchone()), matched=bool(matched(db,me["id"],user_id)))
+    return render_template("member.html", user=u, age=age_from_dob(u["dob"]), liked=bool(db.execute("SELECT 1 FROM likes WHERE from_user=%s AND to_user=%s",(me["id"],user_id)).fetchone()), matched=bool(matched(db,me["id"],user_id)))
 
 @app.route("/block/<int:user_id>", methods=["POST"])
 @login_required
 def block(user_id):
     db=db_conn(); me=current_user()
     if user_id != me["id"]:
-        db.execute("INSERT OR IGNORE INTO blocks(blocker_id,blocked_id) VALUES (?,?)",(me["id"],user_id))
+        db.execute("INSERT INTO blocks(blocker_id,blocked_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",(me["id"],user_id))
         db.commit()
     flash("Member blocked.")
     return redirect(url_for("discover"))
@@ -361,7 +360,7 @@ def report(user_id):
     db=db_conn(); me=current_user()
     reason=request.form.get("reason","Safety concern").strip()[:300] or "Safety concern"
     if user_id != me["id"]:
-        db.execute("INSERT INTO reports(reporter_id,reported_id,reason,created_at) VALUES (?,?,?,?)",(me["id"],user_id,reason,datetime.utcnow().isoformat()))
+        db.execute("INSERT INTO reports(reporter_id,reported_id,reason,created_at) VALUES (%s,%s,%s,%s)",(me["id"],user_id,reason,datetime.utcnow().isoformat()))
         db.commit()
     flash("Thank you. Your report has been recorded.")
     return redirect(url_for("discover"))
@@ -371,7 +370,7 @@ def report(user_id):
 def delete_account():
     db=db_conn(); me=current_user()
     if request.method=="POST":
-        db.execute("DELETE FROM users WHERE id=?", (me["id"],)); db.commit()
+        db.execute("DELETE FROM users WHERE id=%s", (me["id"],)); db.commit()
         session.clear(); flash("Your account has been deleted.")
         return redirect(url_for("index"))
     return render_template("delete_account.html")
