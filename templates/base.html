@@ -23,7 +23,7 @@
 {% with msgs = get_flashed_messages() %}{% if msgs %}<div class="flash">{% for msg in msgs %}<p>{{ msg }}</p>{% endfor %}</div>{% endif %}{% endwith %}
 {% block content %}{% endblock %}
 </main>
-<footer><div class="footer-brand">♥ WonderLove</div><p>{{ t.home }}</p><div class="footer-links"><a href="{{ url_for('privacy') }}">Privacy</a><a href="{{ url_for('terms') }}">Terms</a><a href="mailto:hello@wonderlove.example">Contact</a></div>
+<footer><div class="footer-brand">♥ WonderLove.com</div><p>{{ t.home }}</p><div class="footer-links"><a href="{{ url_for('privacy') }}">Privacy</a><a href="{{ url_for('terms') }}">Terms</a><a href="mailto:hello@wonderlove.example">Contact</a></div>
 <form action="{{ url_for('set_language') }}" method="post" class="language-form"><label for="language">{{ t.language }}</label><select id="language" name="language" onchange="this.form.submit()">{% for code,name in langs.items() %}<option value="{{ code }}" {% if lang==code %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></form>
 <p class="tiny">WonderLove is for adults aged 18+. Use kindness and protect your privacy.</p></footer>
 <script>
