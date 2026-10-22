@@ -13,10 +13,17 @@
 <header class="topbar">
 <a class="brand" href="{{ url_for('index') }}"><img src="{{ url_for('static', filename='logo.png') }}" alt="WonderLove logo"><span>WonderLove.com</span></a>
 <nav>
-<a href="{{ url_for('index') }}">Home</a>
-{% if me %}
-<a href="{{ url_for('discover') }}">{{ t.discover }}</a><a href="{{ url_for('matches') }}">{{ t.matches }}</a><a href="{{ url_for('message_list') }}">{{ t.messages }}</a><a href="{{ url_for('profile') }}">{{ t.profile }}</a><a href="{{ url_for('logout') }}">{{ t.logout }}</a>
-{% else %}<a href="{{ url_for('login') }}">{{ t.login }}</a><a class="button small" href="{{ url_for('register') }}">{{ t.join }}</a>{% endif %}
+    <a href="{{ url_for('index') }}">{{ t.home }}</a>
+    {% if me %}
+        <a href="{{ url_for('discover') }}">{{ t.discover }}</a>
+        <a href="{{ url_for('matches') }}">{{ t.matches }}</a>
+        <a href="{{ url_for('message_list') }}">{{ t.messages }}</a>
+        <a href="{{ url_for('profile') }}">{{ t.profile }}</a>
+        <a href="{{ url_for('logout') }}">{{ t.logout }}</a>
+    {% else %}
+        <a href="{{ url_for('login') }}">{{ t.login }}</a>
+        <a class="button small" href="{{ url_for('register') }}">{{ t.join }}</a>
+    {% endif %}
 </nav>
 </header>
 <main class="container">
